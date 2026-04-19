@@ -1,27 +1,3 @@
-"""
-Структура Firestore:
-
-available_slots/          ← ты добавляешь сюда доступные даты
-  {id}/
-    date: "2024-02-15"    — дата (YYYY-MM-DD)
-    times: ["10:00","11:00","14:00"]  — доступные времена
-    active: true          — показывать пациентам?
-
-appointments/             ← записи пациентов
-  {id}/
-    patientName: "Иванов Иван Иванович"
-    birthDate: "01.01.1990"
-    phone: "+7..."        — необязательно
-    tgUsername: "@ivan"   — необязательно
-    tgId: 123456789
-    date: "2024-02-15"
-    time: "10:00"
-    service: "Консультация"
-    status: "scheduled"   — scheduled | confirmed | cancelled
-    notified: false
-    createdAt: "..."
-"""
-
 import os, json, logging
 from datetime import datetime, date
 import firebase_admin
@@ -50,35 +26,25 @@ def get_db():
     return _db
 
 
-# ══════════════════════════════════════════════════════════════════
-#  ДОСТУПНЫЕ СЛОТЫ (управляет врач)
-# ══════════════════════════════════════════════════════════════════
-
 async def get_available_dates():
-    """Возвращает активные даты для записи (будущие)."""
     db = get_db()
     today = date.today().isoformat()
     result = []
     try:
-        docs = db.collection("available_slots").stream()
-        async for doc in docs:
+        async for doc in db.collection("available_slots").stream():
             d = doc.to_dict()
             if not d:
                 continue
-            # Принимаем и active=True и отсутствие поля active
-            is_active = d.get("active", True)
-            slot_date = d.get("date", "")
-            if is_active and slot_date >= today:
+            if d.get("active", True) and d.get("date", "") >= today:
                 result.append({"id": doc.id, **d})
         result.sort(key=lambda x: x.get("date", ""))
-        logger.info(f"Найдено {len(result)} доступных дат")
+        logger.info(f"Найдено {len(result)} дат")
     except Exception as e:
         logger.error(f"Ошибка get_available_dates: {e}")
     return result
 
 
 async def get_free_times(slot_date: str):
-    """Возвращает свободные времена на дату."""
     db = get_db()
     slot = None
     try:
@@ -102,61 +68,42 @@ async def get_free_times(slot_date: str):
 
 
 async def add_available_slot(slot_date: str, times: list):
-    """Добавить доступную дату (для врача)."""
     db = get_db()
     await db.collection("available_slots").add({
-        "date": slot_date,
-        "times": times,
-        "active": True,
+        "date": slot_date, "times": times, "active": True,
         "createdAt": datetime.utcnow().isoformat()
     })
 
 
 async def delete_available_slot(slot_id: str):
-    db = get_db()
-    await db.collection("available_slots").document(slot_id).delete()
+    await get_db().collection("available_slots").document(slot_id).delete()
 
 
-# ══════════════════════════════════════════════════════════════════
-#  ЗАПИСИ ПАЦИЕНТОВ
-# ══════════════════════════════════════════════════════════════════
-
-async def create_appointment(tg_id: int, patient_name: str, birth_date: str,
-                              phone: str, tg_username: str,
-                              appt_date: str, appt_time: str, service: str) -> str:
+async def create_appointment(tg_id, patient_name, birth_date, phone, tg_username, appt_date, appt_time, service):
     db = get_db()
     data = {
-        "patientName": patient_name,
-        "birthDate": birth_date,
-        "phone": phone or "",
-        "tgUsername": tg_username or "",
-        "tgId": tg_id,
-        "date": appt_date,
-        "time": appt_time,
-        "service": service,
-        "status": "scheduled",
-        "notified": False,
-        "createdAt": datetime.utcnow().isoformat()
+        "patientName": patient_name, "birthDate": birth_date,
+        "phone": phone or "", "tgUsername": tg_username or "",
+        "tgId": tg_id, "date": appt_date, "time": appt_time,
+        "service": service, "status": "scheduled",
+        "notified": False, "createdAt": datetime.utcnow().isoformat()
     }
     ref = await db.collection("appointments").add(data)
     return ref[1].id
 
 
-async def get_appointments_by_date(appt_date: str):
-    """Все записи на дату (для врача)."""
+async def get_appointments_by_date(appt_date):
     db = get_db()
     result = []
-    async for doc in db.collection("appointments").where(
-            "date", "==", appt_date).stream():
+    async for doc in db.collection("appointments").stream():
         d = doc.to_dict()
-        if d.get("status") != "cancelled":
+        if d.get("date") == appt_date and d.get("status") != "cancelled":
             result.append({"id": doc.id, **d})
     result.sort(key=lambda a: a.get("time", ""))
     return result
 
 
 async def get_all_upcoming_appointments():
-    """Все предстоящие записи (для врача)."""
     db = get_db()
     today = date.today().isoformat()
     result = []
@@ -168,44 +115,36 @@ async def get_all_upcoming_appointments():
     return result
 
 
-async def get_appointment_by_id(appt_id: str):
-    db = get_db()
-    doc = await db.collection("appointments").document(appt_id).get()
+async def get_appointment_by_id(appt_id):
+    doc = await get_db().collection("appointments").document(appt_id).get()
     return {"id": doc.id, **doc.to_dict()} if doc.exists else None
 
 
-async def update_status(appt_id: str, status: str):
-    db = get_db()
-    await db.collection("appointments").document(appt_id).update(
-        {"status": status})
+async def update_status(appt_id, status):
+    await get_db().collection("appointments").document(appt_id).update({"status": status})
 
 
-async def get_appointments_for_reminder(tomorrow: str):
+async def get_appointments_for_reminder(tomorrow):
     db = get_db()
     result = []
-    async for doc in db.collection("appointments").where(
-            "date", "==", tomorrow).stream():
+    async for doc in db.collection("appointments").stream():
         d = doc.to_dict()
-        if d.get("status") == "scheduled" and not d.get("notified"):
+        if d.get("date") == tomorrow and d.get("status") == "scheduled" and not d.get("notified"):
             result.append({"id": doc.id, **d})
     return result
 
 
-async def mark_notified(appt_id: str):
-    db = get_db()
-    await db.collection("appointments").document(appt_id).update(
-        {"notified": True})
+async def mark_notified(appt_id):
+    await get_db().collection("appointments").document(appt_id).update({"notified": True})
 
 
-async def get_patient_appointments(tg_id: int):
-    """Активные записи пациента."""
+async def get_patient_appointments(tg_id):
     db = get_db()
     today = date.today().isoformat()
     result = []
-    async for doc in db.collection("appointments").where(
-            "tgId", "==", tg_id).stream():
+    async for doc in db.collection("appointments").stream():
         d = doc.to_dict()
-        if d.get("date", "") >= today and d.get("status") != "cancelled":
+        if d.get("tgId") == tg_id and d.get("date", "") >= today and d.get("status") != "cancelled":
             result.append({"id": doc.id, **d})
     result.sort(key=lambda a: (a.get("date", ""), a.get("time", "")))
     return result
