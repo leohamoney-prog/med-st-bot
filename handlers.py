@@ -15,6 +15,16 @@ from utils import fmt_date
 router = Router()
 
 
+def _end_time(start: str, duration_min: int = 60) -> str:
+    """Возвращает время окончания приёма."""
+    try:
+        h, m = map(int, start.split(":"))
+        total = h * 60 + m + duration_min
+        return f"{total // 60:02d}:{total % 60:02d}"
+    except Exception:
+        return "—"
+
+
 class BookFSM(StatesGroup):
     name       = State()
     birth      = State()
@@ -207,12 +217,12 @@ async def book_confirm(call: CallbackQuery, state: FSMContext, bot: Bot):
     await bot.send_message(
         ADMIN_CHAT_ID,
         f"🆕 <b>Новая запись!</b>\n\n"
-        f"👤 {data['name']}\n"
+        f"👤 <b>{data['name']}</b>\n"
         f"🎂 {data['birth']}\n"
         f"📱 {data.get('phone') or '—'}\n"
         f"💬 {tg or '—'}\n"
         f"📅 {fmt_date(data['date'])}\n"
-        f"🕐 {data['time']}\n"
+        f"🕐 Время приёма: <b>{data['time']} — {_end_time(data['time'])}</b>\n"
         f"🦷 {data['service']}\n"
         f"🔑 ID: #{appt_id[:8]}",
         parse_mode="HTML"

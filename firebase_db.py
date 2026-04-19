@@ -59,34 +59,46 @@ async def get_available_dates():
     db = get_db()
     today = date.today().isoformat()
     result = []
-    async for doc in db.collection("available_slots").stream():
-        d = doc.to_dict()
-        if d.get("active", True) and d.get("date", "") >= today:
-            result.append({"id": doc.id, **d})
-    result.sort(key=lambda x: x.get("date", ""))
+    try:
+        docs = db.collection("available_slots").stream()
+        async for doc in docs:
+            d = doc.to_dict()
+            if not d:
+                continue
+            # Принимаем и active=True и отсутствие поля active
+            is_active = d.get("active", True)
+            slot_date = d.get("date", "")
+            if is_active and slot_date >= today:
+                result.append({"id": doc.id, **d})
+        result.sort(key=lambda x: x.get("date", ""))
+        logger.info(f"Найдено {len(result)} доступных дат")
+    except Exception as e:
+        logger.error(f"Ошибка get_available_dates: {e}")
     return result
 
 
 async def get_free_times(slot_date: str):
     """Возвращает свободные времена на дату."""
     db = get_db()
-    # Находим слот
     slot = None
-    async for doc in db.collection("available_slots").where(
-            "date", "==", slot_date).stream():
-        slot = doc.to_dict()
-        break
-    if not slot:
+    try:
+        async for doc in db.collection("available_slots").stream():
+            d = doc.to_dict()
+            if d.get("date") == slot_date:
+                slot = d
+                break
+        if not slot:
+            return []
+        all_times = slot.get("times", [])
+        booked = []
+        async for doc in db.collection("appointments").stream():
+            d = doc.to_dict()
+            if d.get("date") == slot_date and d.get("status") in ["scheduled", "confirmed"]:
+                booked.append(d.get("time", ""))
+        return [t for t in all_times if t not in booked]
+    except Exception as e:
+        logger.error(f"Ошибка get_free_times: {e}")
         return []
-    all_times = slot.get("times", [])
-    # Убираем уже занятые
-    booked = []
-    async for doc in db.collection("appointments").where(
-            "date", "==", slot_date).stream():
-        d = doc.to_dict()
-        if d.get("status") in ["scheduled", "confirmed"]:
-            booked.append(d.get("time", ""))
-    return [t for t in all_times if t not in booked]
 
 
 async def add_available_slot(slot_date: str, times: list):
